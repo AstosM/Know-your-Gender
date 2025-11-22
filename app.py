@@ -225,7 +225,7 @@ def main():
             </h2>
             <p style="color:#f0f0f0;text-align:center;margin:5px 0 0 0;">
                 Predict gender, explore name statistics, and play with ML features.
-                Made by Ashutosh
+           
             </p>
         </div>
         """,
@@ -276,10 +276,10 @@ def main():
         hist = pd.DataFrame(st.session_state["metrics_history"])
         if len(hist) > 1:
             st.write("Accuracy over this session (re-trains):")
-            fig, ax = plt.subplots()
+            fig, ax = plt.subplots(figsize=(3, 2))
             ax.plot(hist["train_acc"], marker="o", label="Train")
             ax.plot(hist["test_acc"], marker="o", label="Test")
-            ax.set_xlabel("Training run #")
+            ax.set_xlabel("Training run ")
             ax.set_ylabel("Accuracy")
             ax.legend()
             st.pyplot(fig)
