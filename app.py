@@ -69,7 +69,7 @@ def predict_single(name: str, clf, cv):
 
 
 def extract_name_from_sentence(text: str) -> str:
-    """Naive extraction: return last capitalized word, else last word."""
+    """(Old behavior) Naive extraction: return last capitalized word, else last word."""
     if not text.strip():
         return ""
     tokens = text.strip().split()
@@ -77,6 +77,43 @@ def extract_name_from_sentence(text: str) -> str:
     if caps:
         return caps[-1]
     return tokens[-1]
+
+
+def extract_names_from_sentence(text: str):
+    """
+    NEW: Extract multiple possible names from a sentence.
+
+    Heuristics:
+    - Words starting with a capital letter (Ram, Sheela)
+    - Words that come right after 'named', 'name', 'called' (to catch lowercase like 'ashish')
+    """
+    import re
+
+    if not text.strip():
+        return []
+
+    words = re.findall(r"[A-Za-z]+", text)
+    names = []
+    lower_words = [w.lower() for w in words]
+
+    for i, w in enumerate(words):
+        # Capitalized words are likely names
+        if w[0].isupper():
+            names.append(w)
+
+        # Words after certain triggers are treated as names even if lowercase
+        if i > 0 and lower_words[i - 1] in {"named", "name", "called"}:
+            names.append(w)
+
+    # Deduplicate (case-insensitive) while preserving order
+    seen = set()
+    unique_names = []
+    for n in names:
+        if n.lower() not in seen:
+            seen.add(n.lower())
+            unique_names.append(n)
+
+    return unique_names
 
 
 def get_nicknames(name: str, gender_label: str):
@@ -166,7 +203,6 @@ def main():
             0% {{ background-position: 0% 50%; }}
             50% {{ background-position: 100% 50%; }}
             100% {{ background-position: 0% 50%; }}
-            100% {{ background-position: 0% 50%; }}
         }}
         .animated-header {{
             background: linear-gradient(-45deg, #4A90E2, #9013FE, #50E3C2, #B8E986);
@@ -189,6 +225,7 @@ def main():
             </h2>
             <p style="color:#f0f0f0;text-align:center;margin:5px 0 0 0;">
                 Predict gender, explore name statistics, and play with ML features.
+                Made by Ashutosh
             </p>
         </div>
         """,
@@ -254,84 +291,118 @@ def main():
         show_performance()
         st.markdown("---")
 
-        st.subheader("🔮 Single Name Prediction")
+        st.subheader("🔮 Single Name / Sentence Prediction")
 
         name_mode = st.radio(
             "How do you want to input?",
-            ["Type a name", "Detect name from a sentence"],
+            ["Type a name", "Use a sentence with names"],
             horizontal=True,
         )
 
+        # ---- Mode 1: Single name (unchanged) ----
         if name_mode == "Type a name":
             name = st.text_input("Name:")
-        else:
-            sentence = st.text_input("Type a sentence (e.g., 'Hi, I am Suresh'):")
-            if sentence:
-                name = extract_name_from_sentence(sentence)
-                st.info(f"Detected name: **{name}**")
-            else:
-                name = ""
 
-        if st.button("Predict", key="predict_single"):
-            label, proba, pred_int = predict_single(name, clf, cv)
-            if label is None:
-                st.warning("Please enter a valid name.")
-            else:
-                if label == "Male":
-                    card_color = "#d1ecf1"
-                    card_text = "#0c5460"
-                    accent = "#004085"
-                    icon = "♂️"
+            if st.button("Predict", key="predict_single"):
+                label, proba, pred_int = predict_single(name, clf, cv)
+                if label is None:
+                    st.warning("Please enter a valid name.")
                 else:
-                    card_color = "#f8d7da"
-                    card_text = "#721c24"
-                    accent = "#721c24"
-                    icon = "♀️"
+                    if label == "Male":
+                        card_color = "#d1ecf1"
+                        card_text = "#0c5460"
+                        accent = "#004085"
+                        icon = "♂️"
+                    else:
+                        card_color = "#f8d7da"
+                        card_text = "#721c24"
+                        accent = "#721c24"
+                        icon = "♀️"
 
-                st.markdown(
-                    f"""
-                    <div style="background-color:{card_color};color:{card_text};
-                                padding:18px;border-radius:12px;margin-top:15px;">
-                        <h3 style="margin:0;">Prediction: 
-                            <span style="color:{accent};">{label} {icon}</span>
-                        </h3>
-                        <p style="margin:5px 0 0 0;"><strong>Name:</strong> {name}</p>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                    st.markdown(
+                        f"""
+                        <div style="background-color:{card_color};color:{card_text};
+                                    padding:18px;border-radius:12px;margin-top:15px;">
+                            <h3 style="margin:0;">Prediction: 
+                                <span style="color:{accent};">{label} {icon}</span>
+                            </h3>
+                            <p style="margin:5px 0 0 0;"><strong>Name:</strong> {name}</p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
-                # Probabilities
-                if proba is not None and len(proba) == 2:
-                    st.write("**Prediction probabilities:**")
-                    prob_df = pd.DataFrame(
+                    # Probabilities
+                    if proba is not None and len(proba) == 2:
+                        st.write("**Prediction probabilities:**")
+                        prob_df = pd.DataFrame(
+                            {
+                                "Gender": ["Female (0)", "Male (1)"],
+                                "Probability": [proba[0], proba[1]],
+                            }
+                        )
+                        st.bar_chart(prob_df.set_index("Gender"))
+
+                        st.info(
+                            f"Model confidence: **{max(proba)*100:.2f}%** "
+                            f"for **{label}**."
+                        )
+
+                    # Nicknames & similar names
+                    nicknames = get_nicknames(name, label)
+                    if nicknames:
+                        st.write("**Nickname suggestions:** ", ", ".join(nicknames))
+
+                    sims = similar_names(df, name, pred_int)
+                    if sims:
+                        st.write("**Similar names in dataset:** ", ", ".join(sims))
+
+                    # Meaning / origin placeholder
+                    with st.expander("📖 Name meaning & origin (placeholder)"):
+                        st.write(
+                            "To enable this, connect a name dictionary dataset and "
+                            "look up meanings/origins here."
+                        )
+
+        # ---- Mode 2: Sentence with multiple names (NEW) ----
+        else:
+            sentence = st.text_input(
+                "Sentence:",
+                value="Ram is the friend of Sheela's brother named ashish",
+            )
+
+            # Show what *single* name the old extractor would pick (optional)
+            if sentence:
+                single_guess = extract_name_from_sentence(sentence)
+                st.caption(f"(Single-name guess from old logic: **{single_guess}**)")
+
+            if st.button("Detect & Predict from Sentence", key="predict_sentence"):
+                names = extract_names_from_sentence(sentence)
+                if not names:
+                    st.warning("No names detected. Try a sentence with clearer names.")
+                else:
+                    st.info(f"Detected names: **{', '.join(names)}**")
+
+                    vecs = cv.transform(names).toarray()
+                    preds = clf.predict(vecs)
+                    if hasattr(clf, "predict_proba"):
+                        probas = clf.predict_proba(vecs)
+                    else:
+                        probas = None
+
+                    results_df = pd.DataFrame(
                         {
-                            "Gender": ["Female (0)", "Male (1)"],
-                            "Probability": [proba[0], proba[1]],
+                            "name": names,
+                            "predicted_gender": np.where(preds == 0, "Female", "Male"),
+                            "label": preds,
                         }
                     )
-                    st.bar_chart(prob_df.set_index("Gender"))
+                    if probas is not None:
+                        results_df["prob_female"] = probas[:, 0]
+                        results_df["prob_male"] = probas[:, 1]
 
-                    st.info(
-                        f"Model confidence: **{max(proba)*100:.2f}%** "
-                        f"for **{label}**."
-                    )
-
-                # Nicknames & similar names
-                nicknames = get_nicknames(name, label)
-                if nicknames:
-                    st.write("**Nickname suggestions:** ", ", ".join(nicknames))
-
-                sims = similar_names(df, name, pred_int)
-                if sims:
-                    st.write("**Similar names in dataset:** ", ", ".join(sims))
-
-                # Meaning / origin placeholder
-                with st.expander("📖 Name meaning & origin (placeholder)"):
-                    st.write(
-                        "To enable this, connect a name dictionary dataset and "
-                        "look up meanings/origins here."
-                    )
+                    st.write("### Predictions for detected names")
+                    st.dataframe(results_df, use_container_width=True)
 
     # -----------------------------
     # Page: Batch Prediction
@@ -343,7 +414,7 @@ def main():
         st.subheader("📦 Predict for Multiple Names (Text Input Only)")
         names_block = st.text_area(
             "Write one name per line:",
-            value="Ram\nSita\nAmit\nPriya",
+            value="Ram\nSheela\nashish\nAmit\nPriya",
             height=200,
         )
 
@@ -461,9 +532,11 @@ def main():
             **Features included:**
             - Light/Dark theme toggle  
             - Animated gradient header  
-            - Single & batch predictions (text input only)  
+            - Single-name prediction  
+            - NEW: sentence mode that detects **multiple names** and predicts each  
+            - Batch predictions (multi-line text)  
             - Probability display & confidence (Naive Bayes)  
-            - Nickname & similar-name suggestions  
+            - Nickname & similar-name suggestions (single-name mode)  
             - Data insights, wordclouds, and letter frequency heatmap  
             - Session-based accuracy tracking  
             """
