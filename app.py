@@ -5,7 +5,6 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.naive_bayes import MultinomialNB
-from sklearn.linear_model import LogisticRegression
 import matplotlib.pyplot as plt
 
 try:
@@ -34,7 +33,8 @@ def prepare_data(df: pd.DataFrame):
     return df[["name", "gender"]].dropna()
 
 
-def train_model(df: pd.DataFrame, model_type: str = "Naive Bayes"):
+def train_model(df: pd.DataFrame):
+    """Always use Naive Bayes (no model selection)."""
     X = df["name"].astype(str)
     y = df["gender"]
 
@@ -45,11 +45,7 @@ def train_model(df: pd.DataFrame, model_type: str = "Naive Bayes"):
         X_vec, y, test_size=0.2, random_state=42
     )
 
-    if model_type == "Logistic Regression":
-        clf = LogisticRegression(max_iter=1000)
-    else:
-        clf = MultinomialNB()
-
+    clf = MultinomialNB()
     clf.fit(X_train, y_train)
 
     train_acc = clf.score(X_train, y_train)
@@ -170,6 +166,7 @@ def main():
             0% {{ background-position: 0% 50%; }}
             50% {{ background-position: 100% 50%; }}
             100% {{ background-position: 0% 50%; }}
+            100% {{ background-position: 0% 50%; }}
         }}
         .animated-header {{
             background: linear-gradient(-45deg, #4A90E2, #9013FE, #50E3C2, #B8E986);
@@ -188,7 +185,7 @@ def main():
         """
         <div class="animated-header">
             <h2 style="color:white;text-align:center;margin:0;">
-                🧬 Gender Classification by Name
+                🧬 Gender Classification by Name (Know Your Gender)
             </h2>
             <p style="color:#f0f0f0;text-align:center;margin:5px 0 0 0;">
                 Predict gender, explore name statistics, and play with ML features.
@@ -210,11 +207,7 @@ def main():
         ],
     )
 
-    # Model selection
-    st.sidebar.subheader("Model Settings")
-    model_type = st.sidebar.selectbox("Model type", ["Naive Bayes", "Logistic Regression"])
-
-    # Load base data once (no uploads now)
+    # Load base data once
     if "base_df" not in st.session_state:
         st.session_state["base_df"] = prepare_data(load_default_data())
 
@@ -224,21 +217,21 @@ def main():
     if "metrics_history" not in st.session_state:
         st.session_state["metrics_history"] = []
 
-    # Train model with simple progress bar
-    with st.spinner("Training model..."):
+    # Train model with simple progress bar (Naive Bayes only)
+    with st.spinner("Training Naive Bayes model..."):
         progress = st.progress(0)
         progress.progress(20)
-        clf, cv, train_acc, test_acc = train_model(df, model_type=model_type)
+        clf, cv, train_acc, test_acc = train_model(df)
         progress.progress(100)
 
     # Save current metrics
     st.session_state["metrics_history"].append(
-        {"model": model_type, "train_acc": train_acc, "test_acc": test_acc}
+        {"train_acc": train_acc, "test_acc": test_acc}
     )
 
     # Shared performance section
     def show_performance():
-        st.subheader("🎯 Model Performance")
+        st.subheader("🎯 Model Performance (Naive Bayes)")
         c1, c2 = st.columns(2)
         c1.metric("Training Accuracy", f"{train_acc*100:.2f}%")
         c2.metric("Test Accuracy", f"{test_acc*100:.2f}%")
@@ -336,8 +329,8 @@ def main():
                 # Meaning / origin placeholder
                 with st.expander("📖 Name meaning & origin (placeholder)"):
                     st.write(
-                        "To enable this, connect a name dictionary dataset or API "
-                        "and look up meanings/origins here."
+                        "To enable this, connect a name dictionary dataset and "
+                        "look up meanings/origins here."
                     )
 
     # -----------------------------
@@ -460,7 +453,7 @@ def main():
         st.write(
             """
             This interactive app demonstrates **gender prediction from names** using
-            classic machine learning models like Naive Bayes and Logistic Regression.
+            a Naive Bayes classifier.
             """
         )
         st.markdown(
@@ -469,8 +462,7 @@ def main():
             - Light/Dark theme toggle  
             - Animated gradient header  
             - Single & batch predictions (text input only)  
-            - Model selection (Naive Bayes / Logistic Regression)  
-            - Probability display & confidence  
+            - Probability display & confidence (Naive Bayes)  
             - Nickname & similar-name suggestions  
             - Data insights, wordclouds, and letter frequency heatmap  
             - Session-based accuracy tracking  
@@ -481,7 +473,7 @@ def main():
             """
             <hr>
             <div style="text-align:center; padding:10px; color:#888;">
-                Made with ❤️ using Streamlit
+                Made with ❤️ using Streamlit by AstosM
             </div>
             """,
             unsafe_allow_html=True,
