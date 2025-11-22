@@ -224,9 +224,7 @@ def main():
                 🧬 Gender Classification by Name (Know Your Gender)
             </h2>
             <p style="color:#f0f0f0;text-align:center;margin:5px 0 0 0;">
-                Predict gender, explore name statistics, and play with ML features.
-           
-            </p>
+                Predict gender, explore name statistics, and play with ML features.</p>
         </div>
         """,
         unsafe_allow_html=True,
