@@ -274,7 +274,7 @@ def main():
         hist = pd.DataFrame(st.session_state["metrics_history"])
         if len(hist) > 1:
             st.write("Accuracy over this session (re-trains):")
-            fig, ax = plt.subplots(figsize=(3, 2))
+            fig, ax = plt.subplots()
             ax.plot(hist["train_acc"], marker="o", label="Train")
             ax.plot(hist["test_acc"], marker="o", label="Test")
             ax.set_xlabel("Training run ")
