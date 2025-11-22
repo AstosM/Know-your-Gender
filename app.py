@@ -5,29 +5,36 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.naive_bayes import MultinomialNB
+from sklearn.linear_model import LogisticRegression
+import matplotlib.pyplot as plt
+
+try:
+    from wordcloud import WordCloud
+    WORDCLOUD_AVAILABLE = True
+except ImportError:
+    WORDCLOUD_AVAILABLE = False
 
 
-# ---------------------------------------------------------
-# Load dataset (CSV only)
-# ---------------------------------------------------------
-@st.cache_data
-def load_data():
-    try:
-        df = pd.read_csv("Names_dataset.csv")
-    except FileNotFoundError:
-        st.error("❌ 'Names_dataset.csv' not found. Place it in same folder as app.py.")
-        st.stop()
-
+# -----------------------------
+# Utility functions
+# -----------------------------
+def load_default_data():
+    """Load default CSV shipped with the app."""
+    df = pd.read_csv("Names_dataset.csv")
     df = df.copy()
     df["gender"] = df["gender"].replace({"f": 0, "m": 1})
     return df
 
 
-# ---------------------------------------------------------
-# Train Model
-# ---------------------------------------------------------
-@st.cache_resource
-def train_model(df):
+def prepare_data(df: pd.DataFrame):
+    df = df.copy()
+    # Expect columns: name, gender (0/1 or f/m)
+    if df["gender"].dtype == object:
+        df["gender"] = df["gender"].replace({"f": 0, "m": 1}).astype(int)
+    return df[["name", "gender"]].dropna()
+
+
+def train_model(df: pd.DataFrame, model_type: str = "Naive Bayes"):
     X = df["name"].astype(str)
     y = df["gender"]
 
@@ -38,7 +45,11 @@ def train_model(df):
         X_vec, y, test_size=0.2, random_state=42
     )
 
-    clf = MultinomialNB()
+    if model_type == "Logistic Regression":
+        clf = LogisticRegression(max_iter=1000)
+    else:
+        clf = MultinomialNB()
+
     clf.fit(X_train, y_train)
 
     train_acc = clf.score(X_train, y_train)
@@ -47,83 +58,434 @@ def train_model(df):
     return clf, cv, train_acc, test_acc
 
 
-# ---------------------------------------------------------
-# Predict single name
-# ---------------------------------------------------------
-def predict_gender(name, clf, cv):
+def predict_single(name: str, clf, cv):
     if not name.strip():
-        return "Unknown"
+        return None, None, None
     vec = cv.transform([name]).toarray()
-    pred = clf.predict(vec)[0]
-    return "Female" if pred == 0 else "Male"
+    proba = None
+    if hasattr(clf, "predict_proba"):
+        proba = clf.predict_proba(vec)[0]
+        pred = int(np.argmax(proba))
+    else:
+        pred = int(clf.predict(vec)[0])
+    label = "Female" if pred == 0 else "Male"
+    return label, proba, pred
 
 
-# ---------------------------------------------------------
-# Streamlit UI
-# ---------------------------------------------------------
+def extract_name_from_sentence(text: str) -> str:
+    """Naive extraction: return last capitalized word, else last word."""
+    if not text.strip():
+        return ""
+    tokens = text.strip().split()
+    caps = [t for t in tokens if t[0].isalpha() and t[0].isupper()]
+    if caps:
+        return caps[-1]
+    return tokens[-1]
+
+
+def get_nicknames(name: str, gender_label: str):
+    """Simple hardcoded nickname suggestions."""
+    base = name.strip()
+    if not base:
+        return []
+    suggestions = set()
+    if len(base) > 3:
+        suggestions.add(base[:3])
+        suggestions.add(base[:4])
+    if base.endswith("a"):
+        suggestions.add(base[:-1])
+    if gender_label == "Male":
+        suggestions.update([base + " bhai", "Mr. " + base])
+    else:
+        suggestions.update([base + " di", "Ms. " + base])
+    return list(suggestions)
+
+
+def similar_names(df: pd.DataFrame, name: str, gender_int: int, topn: int = 5):
+    """Suggest similar names by prefix."""
+    if not name:
+        return []
+    prefix = name[:2].lower()
+    subset = df[df["gender"] == gender_int]
+    similar = subset[subset["name"].str.lower().str.startswith(prefix)]["name"].unique()
+    similar = [n for n in similar if n.lower() != name.lower()]
+    return list(similar[:topn])
+
+
+def letter_frequency(df: pd.DataFrame):
+    """Compute letter frequency per gender."""
+    rows = []
+    for _, row in df.iterrows():
+        name = str(row["name"]).lower()
+        g = row["gender"]
+        for ch in name:
+            if ch.isalpha():
+                rows.append((ch, g))
+    if not rows:
+        return pd.DataFrame(columns=["letter", "gender", "count"])
+    lf = pd.DataFrame(rows, columns=["letter", "gender"])
+    lf["count"] = 1
+    lf = lf.groupby(["letter", "gender"])["count"].sum().reset_index()
+    return lf
+
+
+def make_wordcloud(text_series, title):
+    text = " ".join(map(str, text_series))
+    wc = WordCloud(width=800, height=400, background_color="white").generate(text)
+    fig, ax = plt.subplots()
+    ax.imshow(wc, interpolation="bilinear")
+    ax.axis("off")
+    ax.set_title(title)
+    return fig
+
+
+# -----------------------------
+# Streamlit app
+# -----------------------------
 def main():
-    st.set_page_config(page_title="Gender Prediction from Names", page_icon="🧬")
+    st.set_page_config(page_title="Gender Prediction", page_icon="🧬", layout="wide")
 
-    st.title("🧬 Gender Classification by Name")
-    st.write("Enter a name to predict if it's more likely **Male** or **Female**.")
+    # Theme (light/dark)
+    if "theme" not in st.session_state:
+        st.session_state["theme"] = "Light"
 
-    # Load dataset
-    df = load_data()
+    theme = st.sidebar.radio("Theme", ["Light", "Dark"], index=0)
+    st.session_state["theme"] = theme
 
-    # Train model
-    clf, cv, train_acc, test_acc = train_model(df)
+    bg_color = "#0b0c10" if theme == "Dark" else "#f5f7fb"
+    text_color = "#f5f7fb" if theme == "Dark" else "#222222"
 
-    # Show dataset info
-    with st.expander("📊 Dataset Overview"):
-        st.dataframe(df.head())
-        st.write("Shape:", df.shape)
-        st.write("Missing Values:")
-        st.write(df.isnull().sum())
-        st.write("Class Counts:", df["gender"].value_counts())
-
-    # Show accuracy
-    st.subheader("🎯 Model Performance")
-    col1, col2 = st.columns(2)
-    col1.metric("Training Accuracy", f"{train_acc*100:.2f}%")
-    col2.metric("Test Accuracy", f"{test_acc*100:.2f}%")
-
-    st.markdown("---")
-
-    # Single Name Prediction
-    st.subheader("🔮 Predict Gender for a Single Name")
-    name = st.text_input("Enter name:", value="Sita")
-
-    if st.button("Predict"):
-        result = predict_gender(name, clf, cv)
-        if result == "Male":
-            st.success(f"**{name}** → **Male** ♂️")
-        elif result == "Female":
-            st.success(f"**{name}** → **Female** ♀️")
-        else:
-            st.warning("Please enter a valid name.")
-
-    st.markdown("---")
-
-    # Batch Prediction
-    st.subheader("📦 Predict for Multiple Names")
-    names_block = st.text_area(
-        "Write one name per line:",
-        value="Ram\nSita\nAmit\nPriya",
-        height=150
+    st.markdown(
+        f"""
+        <style>
+        body {{
+            background-color: {bg_color};
+            color: {text_color};
+        }}
+        .main {{
+            background-color: {bg_color};
+            color: {text_color};
+        }}
+        @keyframes gradient {{
+            0% {{ background-position: 0% 50%; }}
+            50% {{ background-position: 100% 50%; }}
+            100% {{ background-position: 0% 50%; }}
+        }}
+        .animated-header {{
+            background: linear-gradient(-45deg, #4A90E2, #9013FE, #50E3C2, #B8E986);
+            background-size: 400% 400%;
+            animation: gradient 12s ease infinite;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
-    if st.button("Predict Batch"):
-        names = [x.strip() for x in names_block.split("\n") if x.strip()]
-        if not names:
-            st.warning("Enter at least one name.")
+    st.markdown(
+        """
+        <div class="animated-header">
+            <h2 style="color:white;text-align:center;margin:0;">
+                🧬 Gender Classification by Name
+            </h2>
+            <p style="color:#f0f0f0;text-align:center;margin:5px 0 0 0;">
+                Predict gender, explore name statistics, and play with ML features.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Sidebar navigation
+    st.sidebar.title("Navigation")
+    page = st.sidebar.radio(
+        "Go to",
+        [
+            "Predict Single Name",
+            "Batch Prediction",
+            "Data Insights",
+            "About",
+        ],
+    )
+
+    # Model selection
+    st.sidebar.subheader("Model Settings")
+    model_type = st.sidebar.selectbox("Model type", ["Naive Bayes", "Logistic Regression"])
+
+    # Load base data once (no uploads now)
+    if "base_df" not in st.session_state:
+        st.session_state["base_df"] = prepare_data(load_default_data())
+
+    df = st.session_state["base_df"]
+
+    # Track metrics over time
+    if "metrics_history" not in st.session_state:
+        st.session_state["metrics_history"] = []
+
+    # Train model with simple progress bar
+    with st.spinner("Training model..."):
+        progress = st.progress(0)
+        progress.progress(20)
+        clf, cv, train_acc, test_acc = train_model(df, model_type=model_type)
+        progress.progress(100)
+
+    # Save current metrics
+    st.session_state["metrics_history"].append(
+        {"model": model_type, "train_acc": train_acc, "test_acc": test_acc}
+    )
+
+    # Shared performance section
+    def show_performance():
+        st.subheader("🎯 Model Performance")
+        c1, c2 = st.columns(2)
+        c1.metric("Training Accuracy", f"{train_acc*100:.2f}%")
+        c2.metric("Test Accuracy", f"{test_acc*100:.2f}%")
+
+        hist = pd.DataFrame(st.session_state["metrics_history"])
+        if len(hist) > 1:
+            st.write("Accuracy over this session (re-trains):")
+            fig, ax = plt.subplots()
+            ax.plot(hist["train_acc"], marker="o", label="Train")
+            ax.plot(hist["test_acc"], marker="o", label="Test")
+            ax.set_xlabel("Training run #")
+            ax.set_ylabel("Accuracy")
+            ax.legend()
+            st.pyplot(fig)
+
+    # -----------------------------
+    # Page: Predict Single Name
+    # -----------------------------
+    if page == "Predict Single Name":
+        show_performance()
+        st.markdown("---")
+
+        st.subheader("🔮 Single Name Prediction")
+
+        name_mode = st.radio(
+            "How do you want to input?",
+            ["Type a name", "Detect name from a sentence"],
+            horizontal=True,
+        )
+
+        if name_mode == "Type a name":
+            name = st.text_input("Name:")
         else:
-            vecs = cv.transform(names).toarray()
-            preds = clf.predict(vecs)
-            results = pd.DataFrame({
-                "name": names,
-                "predicted_gender": np.where(preds == 0, "Female", "Male")
-            })
-            st.dataframe(results, use_container_width=True)
+            sentence = st.text_input("Type a sentence (e.g., 'Hi, I am Suresh'):")
+            if sentence:
+                name = extract_name_from_sentence(sentence)
+                st.info(f"Detected name: **{name}**")
+            else:
+                name = ""
+
+        if st.button("Predict", key="predict_single"):
+            label, proba, pred_int = predict_single(name, clf, cv)
+            if label is None:
+                st.warning("Please enter a valid name.")
+            else:
+                if label == "Male":
+                    card_color = "#d1ecf1"
+                    card_text = "#0c5460"
+                    accent = "#004085"
+                    icon = "♂️"
+                else:
+                    card_color = "#f8d7da"
+                    card_text = "#721c24"
+                    accent = "#721c24"
+                    icon = "♀️"
+
+                st.markdown(
+                    f"""
+                    <div style="background-color:{card_color};color:{card_text};
+                                padding:18px;border-radius:12px;margin-top:15px;">
+                        <h3 style="margin:0;">Prediction: 
+                            <span style="color:{accent};">{label} {icon}</span>
+                        </h3>
+                        <p style="margin:5px 0 0 0;"><strong>Name:</strong> {name}</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                # Probabilities
+                if proba is not None and len(proba) == 2:
+                    st.write("**Prediction probabilities:**")
+                    prob_df = pd.DataFrame(
+                        {
+                            "Gender": ["Female (0)", "Male (1)"],
+                            "Probability": [proba[0], proba[1]],
+                        }
+                    )
+                    st.bar_chart(prob_df.set_index("Gender"))
+
+                    st.info(
+                        f"Model confidence: **{max(proba)*100:.2f}%** "
+                        f"for **{label}**."
+                    )
+
+                # Nicknames & similar names
+                nicknames = get_nicknames(name, label)
+                if nicknames:
+                    st.write("**Nickname suggestions:** ", ", ".join(nicknames))
+
+                sims = similar_names(df, name, pred_int)
+                if sims:
+                    st.write("**Similar names in dataset:** ", ", ".join(sims))
+
+                # Meaning / origin placeholder
+                with st.expander("📖 Name meaning & origin (placeholder)"):
+                    st.write(
+                        "To enable this, connect a name dictionary dataset or API "
+                        "and look up meanings/origins here."
+                    )
+
+    # -----------------------------
+    # Page: Batch Prediction
+    # -----------------------------
+    elif page == "Batch Prediction":
+        show_performance()
+        st.markdown("---")
+
+        st.subheader("📦 Predict for Multiple Names (Text Input Only)")
+        names_block = st.text_area(
+            "Write one name per line:",
+            value="Ram\nSita\nAmit\nPriya",
+            height=200,
+        )
+
+        if st.button("Predict (Text Area)", key="predict_batch_text"):
+            names = [x.strip() for x in names_block.split("\n") if x.strip()]
+            if not names:
+                st.warning("Enter at least one name.")
+            else:
+                vecs = cv.transform(names).toarray()
+                preds = clf.predict(vecs)
+                if hasattr(clf, "predict_proba"):
+                    probas = clf.predict_proba(vecs)
+                else:
+                    probas = None
+
+                results_df = pd.DataFrame(
+                    {
+                        "name": names,
+                        "predicted_gender": np.where(preds == 0, "Female", "Male"),
+                        "label": preds,
+                    }
+                )
+                if probas is not None:
+                    results_df["prob_female"] = probas[:, 0]
+                    results_df["prob_male"] = probas[:, 1]
+
+                st.dataframe(results_df, use_container_width=True)
+
+    # -----------------------------
+    # Page: Data Insights
+    # -----------------------------
+    elif page == "Data Insights":
+        st.subheader("📊 Data Insights & Visualizations")
+
+        st.write(f"Current dataset shape: **{df.shape}**")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**Class counts:**")
+            st.bar_chart(df["gender"].replace({0: "Female", 1: "Male"}).value_counts())
+        with col2:
+            st.write("**Top 10 most frequent names:**")
+            st.write(df["name"].value_counts().head(10))
+
+        # Names that appear as both genders
+        st.markdown("### 🔁 Unisex / ambiguous names")
+        gender_counts = df.groupby("name")["gender"].nunique()
+        unisex_names = gender_counts[gender_counts > 1].index.tolist()
+        st.write(f"Found **{len(unisex_names)}** names used for both genders.")
+        if unisex_names:
+            st.write(unisex_names[:50])
+
+        # Wordclouds
+        st.markdown("### ☁️ WordClouds")
+        if not WORDCLOUD_AVAILABLE:
+            st.warning(
+                "Install `wordcloud` package to see wordclouds: `pip install wordcloud`."
+            )
+        else:
+            f_names = df[df["gender"] == 0]["name"].head(5000)
+            m_names = df[df["gender"] == 1]["name"].head(5000)
+            colw1, colw2 = st.columns(2)
+            with colw1:
+                st.write("Female names")
+                fig_f = make_wordcloud(f_names, "Female Names")
+                st.pyplot(fig_f)
+            with colw2:
+                st.write("Male names")
+                fig_m = make_wordcloud(m_names, "Male Names")
+                st.pyplot(fig_m)
+
+        # Letter frequency heatmap
+        st.markdown("### 🔤 Letter frequency by gender")
+        lf = letter_frequency(df)
+        if not lf.empty:
+            pivot = lf.pivot_table(
+                index="letter", columns="gender", values="count", fill_value=0
+            )
+            pivot = pivot.sort_index()
+            st.write("Counts table:")
+            st.dataframe(pivot)
+
+            fig, ax = plt.subplots()
+            im = ax.imshow(pivot.values, aspect="auto")
+            ax.set_xticks(range(len(pivot.columns)))
+            ax.set_xticklabels(["Female(0)", "Male(1)"])
+            ax.set_yticks(range(len(pivot.index)))
+            ax.set_yticklabels(pivot.index)
+            ax.set_title("Letter frequency by gender")
+            fig.colorbar(im, ax=ax)
+            st.pyplot(fig)
+        else:
+            st.info("No letters found to compute frequencies.")
+
+        # Popularity graph placeholder
+        st.markdown("### 📈 Popularity over years (placeholder)")
+        st.write(
+            "To enable this, you would need a dataset with a 'year' column and "
+            "name frequencies per year, then plot trends here."
+        )
+
+    # -----------------------------
+    # Page: About
+    # -----------------------------
+    elif page == "About":
+        st.subheader("ℹ️ About This App")
+        st.write(
+            """
+            This interactive app demonstrates **gender prediction from names** using
+            classic machine learning models like Naive Bayes and Logistic Regression.
+            """
+        )
+        st.markdown(
+            """
+            **Features included:**
+            - Light/Dark theme toggle  
+            - Animated gradient header  
+            - Single & batch predictions (text input only)  
+            - Model selection (Naive Bayes / Logistic Regression)  
+            - Probability display & confidence  
+            - Nickname & similar-name suggestions  
+            - Data insights, wordclouds, and letter frequency heatmap  
+            - Session-based accuracy tracking  
+            """
+        )
+
+        st.markdown(
+            """
+            <hr>
+            <div style="text-align:center; padding:10px; color:#888;">
+                Made with ❤️ using Streamlit
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 if __name__ == "__main__":
